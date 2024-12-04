@@ -15,13 +15,14 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use midly::live::LiveEvent;
 use serde::Deserialize;
 use tracing::error;
 
 use crate::audio;
+use crate::player::PlayerDevices;
 use crate::player::StatusEvents;
 
 use self::midi::ToMidiEvent;
@@ -31,6 +32,7 @@ use self::playlist::Playlist;
 mod controller;
 mod dmx;
 mod midi;
+pub mod osc;
 mod player;
 mod playlist;
 mod song;
@@ -94,7 +96,7 @@ pub fn init_player_and_controller(
     playlist_path: &PathBuf,
 ) -> Result<crate::controller::Controller, Box<dyn Error>> {
     let player_config: Player = serde_yaml::from_str(&fs::read_to_string(player_path)?)?;
-    let device = audio::get_device(&player_config.audio_device)?;
+    let audio_device = audio::get_device(&player_config.audio_device)?;
     let midi_device = player_config
         .midi_device
         .map(|midi_device| crate::midi::get_device(&midi_device))
@@ -107,8 +109,17 @@ pub fn init_player_and_controller(
             dmx_config.to_configs(),
         )
     });
+    let osc_handle = player_config
+        .osc_config
+        .map(|osc_config| Arc::new(Mutex::new(crate::osc::Handle::new(&osc_config))));
     let songs = get_all_songs(&PathBuf::from(player_config.songs))?;
     let playlist = parse_playlist(&PathBuf::from(playlist_path), Arc::clone(&songs))?;
+    let player_devices = PlayerDevices {
+        audio: audio_device.clone(),
+        midi: midi_device.clone(),
+        osc: osc_handle.clone(),
+        dmx: dmx_engine.clone(),
+    };
     let status_events = match player_config.status_events {
         Some(status_events) => Some(StatusEvents::new(
             status_events
@@ -131,19 +142,19 @@ pub fn init_player_and_controller(
     };
 
     let player = crate::player::Player::new(
-        device,
+        player_devices,
         player_config.track_mappings.track_mappings,
-        midi_device.clone(),
-        dmx_engine,
         playlist,
         crate::playlist::Playlist::from_songs(songs)?,
         status_events,
     );
     let controller = crate::controller::Controller::new(
         player,
-        player_config.controller.driver(midi_device.clone())?,
-    )?;
-    Ok(controller)
+        player_config
+            .controller
+            .driver(midi_device.clone(), osc_handle)?,
+    );
+    controller
 }
 
 /// Parse a playlist from a YAML file.

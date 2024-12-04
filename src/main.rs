@@ -16,6 +16,7 @@ mod config;
 mod controller;
 mod dmx;
 mod midi;
+mod osc;
 mod player;
 mod playlist;
 mod playsync;
@@ -26,7 +27,7 @@ mod test;
 use clap::{crate_version, Parser, Subcommand};
 use config::init_player_and_controller;
 use dmx::universe::UniverseConfig;
-use player::Player;
+use player::{Player, PlayerDevices};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::path::PathBuf;
@@ -114,6 +115,26 @@ enum Commands {
     Systemd {},
 }
 
+fn convert_mappings(mappings: String) -> Result<HashMap<String, Vec<u16>>, Box<dyn Error>> {
+    let mut converted_mappings = HashMap::new();
+    for mapping in mappings.split(',') {
+        let track_and_channel: Vec<&str> = mapping.split('=').collect();
+        if track_and_channel.len() != 2 {
+            return Err("malformed track to channel mapping".into());
+        };
+        let track = track_and_channel[0];
+        let channel = track_and_channel[1].parse::<u16>()?;
+        if !converted_mappings.contains_key(track) {
+            converted_mappings.insert(track.into(), vec![]);
+        }
+        converted_mappings
+            .get_mut(track)
+            .expect("expected mapping")
+            .push(channel);
+    }
+    Ok(converted_mappings)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt::init();
@@ -184,22 +205,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             repository_path,
             song_name,
         } => {
-            let mut converted_mappings: HashMap<String, Vec<u16>> = HashMap::new();
-            for mapping in mappings.split(',') {
-                let track_and_channel: Vec<&str> = mapping.split('=').collect();
-                if track_and_channel.len() != 2 {
-                    return Err("malformed track to channel mapping".into());
-                };
-                let track = track_and_channel[0];
-                let channel = track_and_channel[1].parse::<u16>()?;
-                if !converted_mappings.contains_key(track) {
-                    converted_mappings.insert(track.into(), vec![]);
-                }
-                converted_mappings
-                    .get_mut(track)
-                    .expect("expected mapping")
-                    .push(channel);
-            }
+            let converted_mappings: HashMap<String, Vec<u16>> = convert_mappings(mappings)?;
 
             let device = audio::get_device(&device_name)?;
             let midi_device = match midi_device_name {
@@ -264,11 +270,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
             };
             let songs = config::get_all_songs(&PathBuf::from(&repository_path))?;
             let playlist = Arc::new(Playlist::new(vec![song_name], Arc::clone(&songs))?);
+            let player_devices = PlayerDevices {
+                audio: device,
+                midi: midi_device,
+                osc: None,
+                dmx: dmx_engine,
+            };
             let player = Player::new(
-                device,
+                player_devices,
                 converted_mappings,
-                midi_device,
-                dmx_engine,
                 playlist,
                 Playlist::from_songs(songs)?,
                 None,

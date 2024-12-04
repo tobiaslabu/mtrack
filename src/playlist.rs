@@ -112,7 +112,7 @@ impl Playlist {
         info!(
             position = *position,
             song = current.name,
-            "Moving to next previous position."
+            "Moving to previous position."
         );
 
         current.clone()
@@ -127,6 +127,10 @@ impl Playlist {
                 .get(&self.songs[*position])
                 .expect("unable to find song in the registry"),
         )
+    }
+
+    pub fn get_song_titles(&self) -> Vec<String> {
+        self.songs.clone()
     }
 }
 

@@ -11,11 +11,16 @@
 // You should have received a copy of the GNU General Public License along with
 // this program. If not, see <https://www.gnu.org/licenses/>.
 //
-use std::{error::Error, sync::Arc};
+use std::{
+    collections::HashMap,
+    error::Error,
+    sync::{Arc, Mutex},
+};
 
 use serde::Deserialize;
+use tracing::error;
 
-use crate::controller::Driver;
+use crate::{controller::Driver, osc::Handle};
 
 use super::midi::{self, ToMidiEvent};
 
@@ -23,8 +28,46 @@ use super::midi::{self, ToMidiEvent};
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub(super) enum Controller {
-    Midi(MidiController),
     Keyboard,
+    Midi(MidiController),
+    Multi(HashMap<String, Controller>),
+    Osc,
+}
+
+fn driver_from_midi_config(
+    config: &MidiController,
+    midi_device: Option<Arc<dyn crate::midi::Device>>,
+) -> Result<Arc<crate::controller::midi::Driver>, Box<dyn Error>> {
+    match midi_device {
+        Some(midi_device) => Ok(Arc::new(crate::controller::midi::Driver::new(
+            midi_device,
+            config.play.to_midi_event()?,
+            config.prev.to_midi_event()?,
+            config.next.to_midi_event()?,
+            config.stop.to_midi_event()?,
+            config.all_songs.to_midi_event()?,
+            config.playlist.to_midi_event()?,
+        ))),
+        None => Err("No MIDI device found for MIDI controller.".into()),
+    }
+}
+
+fn driver_from_midi_config2(
+    config: &MidiController,
+    midi_device: Option<Arc<dyn crate::midi::Device>>,
+) -> Result<Arc<dyn Driver>, Box<dyn Error>> {
+    match midi_device {
+        Some(midi_device) => Ok(Arc::new(crate::controller::midi::Driver::new(
+            midi_device,
+            config.play.to_midi_event()?,
+            config.prev.to_midi_event()?,
+            config.next.to_midi_event()?,
+            config.stop.to_midi_event()?,
+            config.all_songs.to_midi_event()?,
+            config.playlist.to_midi_event()?,
+        ))),
+        None => Err("No MIDI device found for MIDI controller.".into()),
+    }
 }
 
 impl Controller {
@@ -32,21 +75,53 @@ impl Controller {
     pub(super) fn driver(
         &self,
         midi_device: Option<Arc<dyn crate::midi::Device>>,
+        osc_handle: Option<Arc<Mutex<Handle>>>,
     ) -> Result<Arc<dyn Driver>, Box<dyn Error>> {
         match self {
             Controller::Midi(config) => match midi_device {
-                Some(midi_device) => Ok(Arc::new(crate::controller::midi::Driver::new(
-                    midi_device,
-                    config.play.to_midi_event()?,
-                    config.prev.to_midi_event()?,
-                    config.next.to_midi_event()?,
-                    config.stop.to_midi_event()?,
-                    config.all_songs.to_midi_event()?,
-                    config.playlist.to_midi_event()?,
-                ))),
+                Some(midi_device) => driver_from_midi_config2(config, Some(midi_device)),
                 None => Err("No MIDI device found for MIDI controller.".into()),
             },
             Controller::Keyboard => Ok(Arc::new(crate::controller::keyboard::Driver::new())),
+            Controller::Multi(vec) => Ok(Arc::new(crate::controller::multi::Driver::new(
+                vec.iter()
+                    .filter_map(|d| match d {
+                        (_key, Controller::Keyboard) => {
+                            Some(crate::controller::multi::SubDriver::Keyboard(Arc::new(
+                                crate::controller::keyboard::Driver::new(),
+                            )))
+                        }
+
+                        (_key, Controller::Midi(midi_controller)) => {
+                            let midi_driver_result =
+                                driver_from_midi_config(midi_controller, midi_device.clone());
+                            match midi_driver_result {
+                                Ok(driver) => {
+                                    Some(crate::controller::multi::SubDriver::Midi(driver))
+                                }
+                                Err(_e) => None,
+                            }
+                        }
+
+                        (_key, Controller::Multi(_vec)) => {
+                            error!("Recursive multi controllers are not supported");
+                            None
+                        }
+
+                        (_key, Controller::Osc) => match osc_handle.clone() {
+                            Some(osc_handle) => {
+                                let d = crate::controller::osc::Driver::new(osc_handle.clone());
+                                Some(crate::controller::multi::SubDriver::Osc(Arc::new(d)))
+                            }
+                            None => None,
+                        },
+                    })
+                    .collect::<Vec<_>>(),
+            ))),
+            Controller::Osc => match osc_handle {
+                Some(osc_handle) => Ok(Arc::new(crate::controller::osc::Driver::new(osc_handle))),
+                None => Err("Need an OSC config to create an OSC controller".into()),
+            },
         }
     }
 }

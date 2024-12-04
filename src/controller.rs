@@ -23,6 +23,8 @@ use crate::player::Player;
 
 pub mod keyboard;
 pub mod midi;
+pub mod multi;
+pub mod osc;
 
 /// Controller events that will trigger behavior in the player.
 #[derive(Debug)]
@@ -133,7 +135,12 @@ mod test {
 
     use tokio::{sync::mpsc::Sender, task::JoinHandle};
 
-    use crate::{audio, config, player::Player, playlist::Playlist, test::eventually};
+    use crate::{
+        audio, config,
+        player::{Player, PlayerDevices},
+        playlist::Playlist,
+        test::eventually,
+    };
 
     use super::{Driver, Event};
 
@@ -227,11 +234,15 @@ mod test {
         let playlist =
             config::parse_playlist(&PathBuf::from("assets/playlist.yaml"), songs.clone())?;
         let all_songs_playlist = Playlist::from_songs(songs.clone())?;
+        let devices = PlayerDevices {
+            audio: device.clone(),
+            midi: None,
+            osc: None,
+            dmx: None,
+        };
         let player = Player::new(
-            device.clone(),
+            devices,
             mappings,
-            None,
-            None,
             playlist.clone(),
             all_songs_playlist.clone(),
             None,

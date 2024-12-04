@@ -16,6 +16,7 @@ use serde::Deserialize;
 use super::controller::Controller;
 use super::dmx::Dmx;
 use super::midi;
+use super::osc::Config;
 use super::trackmappings::TrackMappings;
 
 /// The configuration for the multitrack player.
@@ -31,6 +32,8 @@ pub(super) struct Player {
     pub midi_device: Option<String>,
     /// The DMX configuration.
     pub dmx: Option<Dmx>,
+    /// The OSC configuration to use.
+    pub osc_config: Option<Config>,
     /// Events to emit to report status out via MIDI.
     pub status_events: Option<StatusEvents>,
     /// The path to the song definitions.

@@ -131,7 +131,7 @@ impl Device {
                         device,
                         supports_f32,
                         supports_i32,
-                    })
+                    });
                 }
             }
         }

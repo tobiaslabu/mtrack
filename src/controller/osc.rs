@@ -189,7 +189,6 @@ mod test {
         audio,
         config::{self, osc::Config},
         controller::Controller,
-        dmx,
         player::{Player, PlayerDevices},
         playlist::Playlist,
         test::eventually,
@@ -502,7 +501,7 @@ mod test {
             audio: device.clone(),
             midi: None,
             osc: Some(osc_handle.clone()),
-            dmx: dmx::get_device(),
+            dmx: None,
         };
         let player = Player::new(
             player_devices,

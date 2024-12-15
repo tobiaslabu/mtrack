@@ -64,7 +64,7 @@ mod test {
     use crate::{
         audio, config,
         controller::{multi::SubDriver, Controller},
-        dmx, midi,
+        midi,
         player::{Player, PlayerDevices},
         playlist::Playlist,
         test::eventually,
@@ -156,7 +156,7 @@ mod test {
             audio: device.clone(),
             midi: None,
             osc: None,
-            dmx: dmx::get_device(),
+            dmx: None,
         };
         let player = Player::new(
             player_devices,

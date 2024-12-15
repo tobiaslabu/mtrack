@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 
 use midly::live::LiveEvent;
 use serde::Deserialize;
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::audio;
 use crate::player::PlayerDevices;
@@ -63,6 +63,7 @@ pub fn parse_songs(file: &PathBuf) -> Result<Vec<crate::songs::Song>, Box<dyn Er
 
 /// Recurse into the given path and return all valid songs found.
 pub fn get_all_songs(path: &PathBuf) -> Result<Arc<crate::songs::Songs>, Box<dyn Error>> {
+    debug!("Getting songs for directory {path:?}");
     let mut songs: HashMap<String, Arc<crate::songs::Song>> = HashMap::new();
     for entry in fs::read_dir(path)? {
         let entry = entry?;
@@ -112,7 +113,8 @@ pub fn init_player_and_controller(
     let osc_handle = player_config
         .osc_config
         .map(|osc_config| Arc::new(Mutex::new(crate::osc::Handle::new(&osc_config))));
-    let songs = get_all_songs(&PathBuf::from(player_config.songs))?;
+    let songs_path = get_songs_path(player_path, player_config.songs);
+    let songs = get_all_songs(&songs_path)?;
     let playlist = parse_playlist(&PathBuf::from(playlist_path), Arc::clone(&songs))?;
     let player_devices = PlayerDevices {
         audio: audio_device.clone(),
@@ -155,6 +157,21 @@ pub fn init_player_and_controller(
             .driver(midi_device.clone(), osc_handle)?,
     );
     controller
+}
+
+fn get_songs_path(player_path: &PathBuf, songs: String) -> PathBuf {
+    let songs_path_config = PathBuf::from(&songs);
+    if songs_path_config.is_absolute() {
+        return songs_path_config;
+    }
+    let player_path_directory = match player_path.parent() {
+        Some(path) => path,
+        None => {
+            error!("Could not find parent of player path {player_path:?}");
+            return songs_path_config;
+        }
+    };
+    player_path_directory.join(&songs)
 }
 
 /// Parse a playlist from a YAML file.

@@ -25,6 +25,7 @@ use std::{
 use futures::SinkExt;
 use midly::live::LiveEvent;
 use tokio::{
+    spawn,
     sync::{oneshot, Mutex},
     task::JoinHandle,
 };
@@ -34,7 +35,9 @@ use crate::{
     audio, dmx, midi, osc::Handle, playlist::Playlist, playsync::CancelHandle, songs::Song,
 };
 
+#[derive(Debug)]
 pub enum PlayerMessage {
+    Select(String),
     Play(String),
     Prev,
     Next,
@@ -90,6 +93,10 @@ impl Player {
         all_songs_playlist: Arc<Playlist>,
         status_events: Option<StatusEvents>,
     ) -> Player {
+        let span = span!(Level::DEBUG, "Player::new");
+        let _enter = span.enter();
+        debug!("Creating player");
+
         let player = Player {
             device: devices.audio,
             mappings: Arc::new(mappings),
@@ -103,13 +110,20 @@ impl Player {
             stop_run: Arc::new(AtomicBool::new(false)),
             span: span!(Level::INFO, "player"),
         };
+        let song = player.get_playlist().current();
+
+        let message = PlayerMessage::Playlist(player.get_playlist().get_song_titles());
+        spawn(Player::notify_osc_ext(player.osc_handle.clone(), message));
+
+        let message = PlayerMessage::Select(song.name.to_string());
+        spawn(Player::notify_osc_ext(player.osc_handle.clone(), message));
 
         if player.midi_device.is_none() {
             return player;
         }
 
         // Emit the event for the first track if needed.
-        Player::emit_midi_event(player.midi_device.clone(), &player.get_playlist().current());
+        Player::emit_midi_event(player.midi_device.clone(), &song);
 
         if let Some(status_events) = status_events {
             let midi_device = player
@@ -262,7 +276,7 @@ impl Player {
                 cancelled = join.cancel.is_cancelled();
                 if !cancelled {
                     Player::notify_osc_ext(osc_handle.clone(), PlayerMessage::Next).await;
-                    Player::next_and_emit(midi_device, playlist);
+                    Player::next_and_emit(midi_device, osc_handle, playlist);
                 }
             }
 
@@ -337,7 +351,7 @@ impl Player {
             Player::notify_osc_ext(osc_handle, message).await;
         });
         match tokio::runtime::Handle::current().block_on(osc_join_handle) {
-            Ok(_r) => debug!("OSC join result: ok"),
+            Ok(_result) => debug!("OSC join result: ok"),
             Err(e) => warn!("OSC join error: {e}"),
         };
 
@@ -456,7 +470,11 @@ impl Player {
         }
 
         self.notify_osc(PlayerMessage::Next).await;
-        Ok(Player::next_and_emit(self.midi_device.clone(), playlist))
+        Ok(Player::next_and_emit(
+            self.midi_device.clone(),
+            self.osc_handle.clone(),
+            playlist,
+        ))
     }
 
     /// Prev goes to the previous entry in the playlist.
@@ -474,7 +492,11 @@ impl Player {
         }
 
         self.notify_osc(PlayerMessage::Prev).await;
-        Ok(Player::prev_and_emit(self.midi_device.clone(), &playlist))
+        Ok(Player::prev_and_emit(
+            self.midi_device.clone(),
+            self.osc_handle.clone(),
+            &playlist,
+        ))
     }
 
     /// Stop will stop a song if a song is playing.
@@ -527,6 +549,9 @@ impl Player {
 
         let message = PlayerMessage::Playlist(self.all_songs.get_song_titles());
         self.notify_osc(message).await;
+        let message = PlayerMessage::Select(song.name.to_string());
+        self.notify_osc(message).await;
+
         Player::emit_midi_event(self.midi_device.clone(), &song);
         Ok(())
     }
@@ -535,19 +560,22 @@ impl Player {
     pub async fn switch_to_playlist(&self) -> Result<(), Box<dyn Error>> {
         info!("Switching to playlist");
         let join = self.join.lock().await;
-        let playlist = self.get_playlist();
         if join.is_some() {
             info!(
-                current_song = playlist.current().name,
+                current_song = self.get_playlist().current().name,
                 "Can't switch to playlist, player is active."
             );
             return Ok(());
         }
 
         self.use_all_songs.store(false, Ordering::Relaxed);
+
+        let playlist = self.get_playlist();
         let song = playlist.current();
 
         let message = PlayerMessage::Playlist(playlist.get_song_titles());
+        self.notify_osc(message).await;
+        let message = PlayerMessage::Select(song.name.to_string());
         self.notify_osc(message).await;
 
         Player::emit_midi_event(self.midi_device.clone(), &song);
@@ -566,20 +594,31 @@ impl Player {
     /// Goes to the previous song and emits the MIDI event associated if one exists.
     fn prev_and_emit(
         midi_device: Option<Arc<dyn midi::Device>>,
+        osc_handle: Option<Arc<std::sync::Mutex<Handle>>>,
         playlist: &Arc<Playlist>,
     ) -> Arc<Song> {
         let song = playlist.prev();
         Player::emit_midi_event(midi_device, &song);
+
+        let message = PlayerMessage::Select(song.name.to_string());
+        spawn(Player::notify_osc_ext(osc_handle, message));
+
         song
     }
 
     /// Goes to the next song and emits the MIDI event associated if one exists.
     fn next_and_emit(
         midi_device: Option<Arc<dyn midi::Device>>,
+        osc_handle: Option<Arc<std::sync::Mutex<Handle>>>,
         playlist: Arc<Playlist>,
     ) -> Arc<Song> {
         let song = playlist.next();
+
         Player::emit_midi_event(midi_device, &song);
+
+        let message = PlayerMessage::Select(song.name.to_string());
+        spawn(Player::notify_osc_ext(osc_handle, message));
+
         song
     }
 

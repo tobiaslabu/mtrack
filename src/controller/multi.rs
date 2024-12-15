@@ -73,7 +73,10 @@ mod test {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_multi_controller() -> Result<(), Box<dyn Error>> {
         // Set up all of the MIDI events and the MIDI controller driver.
-        tracing_subscriber::fmt::init();
+        let subscriber = tracing_subscriber::fmt()
+            // ... add configuration
+            .finish();
+        let _default_guard = tracing::subscriber::set_default(subscriber);
         let midi_device = Arc::new(midi::test::Device::get("mock-midi-device"));
         let play_event = midly::live::LiveEvent::Midi {
             channel: 16.into(),

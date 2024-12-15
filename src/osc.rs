@@ -73,16 +73,17 @@ impl Handle {
 
         let token = CancellationToken::new();
         let socket: Arc<Mutex<Option<UdpSocket>>> = Arc::new(Mutex::new(None));
-        let osc_receiver = OscReceiver::new(
+        let _osc_receiver = OscReceiver::new(
             osc_in_rx,
             socket.clone(),
             outlets,
             token.child_token(),
             config,
         );
-        let osc_sender = OscSender::new(osc_in_tx, osc_out_rx, socket.clone(), token.child_token());
+        let _osc_sender =
+            OscSender::new(osc_in_tx, osc_out_rx, socket.clone(), token.child_token());
 
-        let player_receiver = PlayerReceiver::new(player_rx, osc_out_tx_from_player);
+        let _player_receiver = PlayerReceiver::new(player_rx, osc_out_tx_from_player);
         osc_handle
     }
 
@@ -191,7 +192,7 @@ impl OscReceiver {
             info!("OSC receive task finished!");
             Ok(())
         };
-        let osc_in_handle: JoinHandle<Result<(), Error>> =
+        let _osc_in_handle: JoinHandle<Result<(), Error>> =
             tokio::spawn(osc_receive(config.listen_host, config.listen_port));
         Self {}
     }
@@ -210,9 +211,7 @@ impl OscReceiver {
                         Some(recipient) => ResponseToOsc::Driver(packet.to_owned(), recipient),
                         None => ResponseToOsc::Empty,
                     },
-                    Some("current_song") => {
-                        ResponseToOsc::from((StateRequest::CurrentSong, recipient))
-                    }
+                    Some("song") => ResponseToOsc::from((StateRequest::CurrentSong, recipient)),
                     Some("playlist") => ResponseToOsc::from((StateRequest::Playlist, recipient)),
                     Some("is_playing") => ResponseToOsc::from((StateRequest::IsPlaying, recipient)),
                     Some(s) => {
@@ -310,6 +309,10 @@ impl OscSender {
     ) -> Self {
         fn set_state(player_message: &PlayerMessage, state: &mut OscPlayerState) -> PlayerMessage {
             match &player_message {
+                PlayerMessage::Select(song) => {
+                    state.current_song = Some(song.clone());
+                    PlayerMessage::Select(song.clone())
+                }
                 PlayerMessage::Play(song) => {
                     state.current_song = Some(song.clone());
                     PlayerMessage::Play(song.clone())
@@ -361,7 +364,7 @@ impl OscSender {
                         None => "-",
                     };
                     OscMessage {
-                        addr: "/current_song".to_string(),
+                        addr: "/song".to_string(),
                         args: vec![OscType::String(song_title.to_string())],
                     }
                 }
@@ -465,7 +468,7 @@ impl OscSender {
                 }
             }
         };
-        let osc_out_handle = tokio::spawn(osc_send());
+        let _osc_out_handle = tokio::spawn(osc_send());
         Self {}
     }
 
@@ -473,24 +476,41 @@ impl OscSender {
         player_message: PlayerMessage,
         state: &OscPlayerState,
     ) -> OscPacket {
-        const SONG_ADDR: &str = "/song";
+        const SONG_PLAY_ADDR: &str = "/song/play";
+        const SONG_SELECT_ADDR: &str = "/song/select";
         let osc = match player_message {
-            PlayerMessage::Play(song) => OscMessage {
-                addr: SONG_ADDR.to_string(),
+            PlayerMessage::Select(song) => OscMessage {
+                addr: SONG_SELECT_ADDR.to_string(),
                 args: vec![OscType::String(song.clone())],
             },
-            PlayerMessage::Prev => todo!(),
+            PlayerMessage::Play(song) => OscMessage {
+                addr: SONG_PLAY_ADDR.to_string(),
+                args: vec![OscType::String(song.clone())],
+            },
+            PlayerMessage::Prev => {
+                let next_song_title = match &state.current_song {
+                    Some(song_title) => song_title.clone(),
+                    None => "-".to_string(),
+                };
+                OscMessage {
+                    addr: SONG_SELECT_ADDR.to_string(),
+                    args: vec![OscType::String(next_song_title)],
+                }
+            }
             PlayerMessage::Next => {
                 let next_song_title = match &state.current_song {
                     Some(song_title) => song_title.clone(),
                     None => "-".to_string(),
                 };
                 OscMessage {
-                    addr: SONG_ADDR.to_string(),
+                    addr: SONG_SELECT_ADDR.to_string(),
                     args: vec![OscType::String(next_song_title)],
                 }
             }
-            PlayerMessage::Stop => todo!(),
+            PlayerMessage::Stop => OscMessage {
+                addr: "/stop".to_string(),
+                args: [].to_vec(),
+            },
             PlayerMessage::Playlist(playlist) => OscMessage {
                 addr: "/playlist".to_string(),
                 args: playlist
@@ -509,7 +529,7 @@ impl PlayerReceiver {
         mut player_rx: mpsc::Receiver<PlayerMessage>,
         mut osc_out_tx_from_player: Sender<OscOutMessage>,
     ) -> Self {
-        let player_join = tokio::spawn(async move {
+        let _player_join = tokio::spawn(async move {
             loop {
                 info!("Waiting for player message..");
                 let player_message_option = player_rx.next().await;
@@ -517,23 +537,37 @@ impl PlayerReceiver {
                 match player_message_option {
                     Some(player_message) => match player_message {
                         PlayerMessage::Playlist(playlist) => {
-                            let osc_out_result = osc_out_tx_from_player
+                            let _osc_out_result = osc_out_tx_from_player
                                 .send(OscOutMessage::Player(PlayerMessage::Playlist(playlist)))
+                                .await;
+                        }
+                        PlayerMessage::Select(song) => {
+                            info!("The player selected song {song}");
+                            let _osc_out_result = osc_out_tx_from_player
+                                .send(OscOutMessage::Player(PlayerMessage::Select(song)))
                                 .await;
                         }
                         PlayerMessage::Play(song) => {
                             info!("The player is playing song {song}");
-                            let osc_out_result = osc_out_tx_from_player
+                            let _osc_out_result = osc_out_tx_from_player
                                 .send(OscOutMessage::Player(PlayerMessage::Play(song)))
                                 .await;
                         }
-                        PlayerMessage::Prev => todo!(),
+                        PlayerMessage::Prev => {
+                            let _osc_out_result = osc_out_tx_from_player
+                                .send(OscOutMessage::Player(PlayerMessage::Prev))
+                                .await;
+                        }
                         PlayerMessage::Next => {
-                            let osc_out_result = osc_out_tx_from_player
+                            let _osc_out_result = osc_out_tx_from_player
                                 .send(OscOutMessage::Player(PlayerMessage::Next))
                                 .await;
                         }
-                        PlayerMessage::Stop => todo!(),
+                        PlayerMessage::Stop => {
+                            let _osc_out_result = osc_out_tx_from_player
+                                .send(OscOutMessage::Player(PlayerMessage::Stop))
+                                .await;
+                        }
                     },
                     None => {
                         warn!("Nothing received from player");

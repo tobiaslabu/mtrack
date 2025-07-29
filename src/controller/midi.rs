@@ -14,7 +14,8 @@
 use std::{error::Error, io, sync::Arc};
 
 use midly::live::LiveEvent;
-use tokio::{sync::mpsc, task::JoinHandle};
+use tokio::{select, sync::mpsc, task::JoinHandle};
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, span, Level};
 
 use crate::{config, midi::Device, player::Player};
@@ -60,7 +61,7 @@ impl Driver {
 }
 
 impl super::Driver for Driver {
-    fn monitor_events(&self) -> JoinHandle<Result<(), io::Error>> {
+    fn monitor_events(&self, cancellation_token: CancellationToken) -> JoinHandle<Result<(), io::Error>> {
         let (midi_events_tx, mut midi_events_rx) = mpsc::channel::<Vec<u8>>(10);
         let player = self.player.clone();
         let device = self.midi_device.clone();
@@ -79,7 +80,7 @@ impl super::Driver for Driver {
 
             if let Err(e) = device
                 .watch_events(midi_events_tx)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
+                .map_err( |e| io::Error::other(e.to_string()))
             {
                 error!(err = e.to_string(), "Error watching MIDI events");
             }
@@ -88,7 +89,15 @@ impl super::Driver for Driver {
         let device = self.midi_device.clone();
         tokio::spawn(async move {
             loop {
-                let raw_event = match midi_events_rx.recv().await {
+                let received_event = select!(
+                    _cancelled = cancellation_token.cancelled() => {
+                        None
+                    },
+                    event = midi_events_rx.recv() => {
+                        event
+                    }
+                );
+                let raw_event = match received_event {
                     Some(raw_event) => raw_event,
                     None => {
                         info!("MIDI watcher closed.");
@@ -182,6 +191,7 @@ mod test {
                 Some(config::Midi::new("mock-midi-device", None)),
                 None,
                 HashMap::new(),
+                None,
                 "assets/songs",
             ),
         )?);

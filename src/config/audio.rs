@@ -16,7 +16,7 @@ use std::{error::Error, time::Duration};
 use duration_string::DurationString;
 use serde::Deserialize;
 
-const DEFAULT_AUDIO_PLAYBACK_DELAY: Duration = Duration::ZERO;
+pub(crate) const DEFAULT_AUDIO_PLAYBACK_DELAY: Duration = Duration::ZERO;
 
 /// A YAML representation of the audio configuration.
 #[derive(Deserialize, Clone)]

@@ -14,6 +14,7 @@
 use std::{io, sync::Arc};
 
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, span, warn, Level};
 
 use crate::player::Player;
@@ -49,33 +50,28 @@ impl Driver {
         let mut input: String = String::default();
         reader.read_line(&mut input)?;
 
+        let player = player.clone();
         match input.trim().to_lowercase().as_str() {
             PLAY => {
-                let player = player.clone();
                 tokio::spawn(async move { player.play().await });
             }
             PREV => {
-                let player = player.clone();
                 tokio::spawn(async move { player.prev().await });
             }
             NEXT => {
-                let player = player.clone();
                 tokio::spawn(async move { player.next().await });
             }
             STOP => {
-                let player = player.clone();
                 tokio::spawn(async move { player.stop().await });
             }
             ALL_SONGS => {
-                let player = player.clone();
                 tokio::spawn(async move { player.switch_to_all_songs().await });
             }
             PLAYLIST => {
-                let player = player.clone();
                 tokio::spawn(async move { player.switch_to_playlist().await });
             }
-            _ => {
-                warn!(input = input, "Unrecognized input");
+            unrecognized => {
+                warn!(input = input, "Unrecognized input: {unrecognized}");
             }
         }
         Ok(())
@@ -83,7 +79,7 @@ impl Driver {
 }
 
 impl super::Driver for Driver {
-    fn monitor_events(&self) -> JoinHandle<Result<(), io::Error>> {
+    fn monitor_events(&self, cancellation_token: CancellationToken) -> JoinHandle<Result<(), io::Error>> {
         let player = self.player.clone();
         tokio::task::spawn_blocking(move || {
             let span = span!(Level::INFO, "keyboard driver");
@@ -92,8 +88,14 @@ impl super::Driver for Driver {
             info!("Keyboard driver started.");
 
             loop {
-                Self::monitor_io(player.clone(), io::stdin().lock(), io::stdout())?;
+                if cancellation_token.is_cancelled() {
+                    break;
+                }
+                Self::monitor_io(player.clone(),
+                   io::stdin().lock(),
+                   io::stdout())?;
             }
+            Ok(())
         })
     }
 }
@@ -119,7 +121,7 @@ mod test {
     use super::Player;
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_osc() -> Result<(), Box<dyn Error>> {
+    async fn test_keyboard() -> Result<(), Box<dyn Error>> {
         let songs = songs::get_all_songs(Path::new("assets/songs"))?;
         let player = Arc::new(Player::new(
             songs.clone(),
@@ -133,6 +135,7 @@ mod test {
                 Some(config::Midi::new("mock-midi-device", None)),
                 None,
                 HashMap::new(),
+                None,
                 "assets/songs",
             ),
         )?);
@@ -174,9 +177,10 @@ mod test {
 
         key_event(NEXT)?;
         println!("AllSongs -> Song 10");
+        println!("-> {}", player.get_playlist().current().name());
         eventually(
             || player.get_playlist().current().name() == "Song 10",
-            "Event not processed",
+            &format!("Event not processed {}", player.get_playlist().current().name())
         );
 
         key_event(NEXT)?;
@@ -225,7 +229,7 @@ mod test {
         eventually(|| device.is_playing(), "Song never started playing");
 
         key_event(STOP)?;
-        eventually(|| !device.is_playing(), "Song never stopped playing");
+        eventually(|| !device.is_playing(), &format!("Song never stopped playing. Current song: {}", player.get_playlist().current().name()));
 
         // Player should not have moved to the next song.
         assert_eq!(player.get_playlist().current().name(), "Song 5");

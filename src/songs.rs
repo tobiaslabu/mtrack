@@ -340,8 +340,7 @@ impl Song {
         let duration = match prost_types::Duration::try_from(self.duration) {
             Ok(duration) => duration,
             Err(e) => {
-                return Err(std::io::Error::new::<String>(
-                    std::io::ErrorKind::Other,
+                return Err(std::io::Error::other::<String>(
                     e.to_string(),
                 ))
             }
@@ -923,9 +922,15 @@ impl Songs {
 
     /// Gets a song from the song registry.
     pub fn get(&self, name: &String) -> Result<Arc<Song>, Box<dyn Error>> {
+        debug!("Looking for song {} in songs {}", name, 
+            self.songs.keys().map(|k|k.to_string()).collect::<Vec<_>>().join(", "));
         match self.songs.get(name) {
             Some(song) => Ok(Arc::clone(song)),
-            None => Err(format!("unable to find song {}", name).into()),
+            None => {
+                error!("Unable to find song {} in songs {}", name, 
+                    self.songs.keys().map(|k|k.to_string()).collect::<Vec<_>>().join(", "));
+                Err(format!("Unable to find song {}", name).into())
+            },
         }
     }
 

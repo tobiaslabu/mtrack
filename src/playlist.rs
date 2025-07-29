@@ -80,7 +80,7 @@ impl Playlist {
             *position += 1;
         }
 
-        let current = &self
+        let current = self
             .registry
             .get(&self.songs[*position])
             .expect("unable to get song from the registry");
@@ -91,7 +91,7 @@ impl Playlist {
             "Moving to next playlist position."
         );
 
-        current.clone()
+        current
     }
 
     /// Move to the previous element of the playlist. If we're at the beginning of the playlist, the position
@@ -102,7 +102,7 @@ impl Playlist {
             *position -= 1;
         }
 
-        let current = &self.registry.get(&self.songs[*position]).unwrap();
+        let current = self.registry.get(&self.songs[*position]).unwrap();
 
         info!(
             position = *position,
@@ -110,18 +110,16 @@ impl Playlist {
             "Moving to next previous position."
         );
 
-        current.clone()
+        current
     }
 
     /// Return the song at the current position of the playlist.
     pub fn current(&self) -> Arc<Song> {
         let position = self.position.read().expect("unable to get lock");
-        Arc::clone(
-            &self
-                .registry
-                .get(&self.songs[*position])
-                .expect("unable to find song in the registry"),
-        )
+        self
+            .registry
+            .get(&self.songs[*position])
+            .expect("unable to find song in the registry")
     }
 }
 

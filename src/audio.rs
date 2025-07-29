@@ -44,12 +44,7 @@ pub fn list_devices() -> Result<Vec<Box<dyn Device>>, Box<dyn Error>> {
 }
 
 /// Gets a device with the given name.
-pub fn get_device(config: Option<config::Audio>) -> Result<Arc<dyn Device>, Box<dyn Error>> {
-    let config = match config {
-        Some(config) => config,
-        None => return Err("there must be an audio device specified".into()),
-    };
-
+pub fn get_device(config: config::Audio) -> Result<Arc<dyn Device>, Box<dyn Error>> {
     let device = config.device();
     if device.starts_with("mock") {
         return Ok(Arc::new(mock::Device::get(device)));

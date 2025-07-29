@@ -1,0 +1,16 @@
+audio:
+  device: mock-audio
+songs: songs
+playlist: playlist.yaml
+track_mappings:
+  click:
+  - 1
+  cue:
+  - 2
+  backing-track-l:
+  - 3
+  backing-track-r:
+  - 4
+  keys:
+  - 5
+  - 6

@@ -13,19 +13,18 @@
 //
 use std::{error::Error, io, net::SocketAddr, sync::Arc};
 
-use tokio::task::JoinHandle;
+use tokio::{select, task::JoinHandle};
+use tokio_util::sync::CancellationToken;
 use tonic::{transport::Server, Request, Response, Status};
 use tracing::{info, span, Level};
 
 use crate::{
-    config,
-    player::Player,
-    proto::player::v1::{
+    config, player::Player, proto::player::v1::{
         player_service_server::{PlayerService, PlayerServiceServer},
         NextRequest, NextResponse, PlayRequest, PlayResponse, PreviousRequest, PreviousResponse,
         StatusRequest, StatusResponse, StopRequest, StopResponse, SwitchToPlaylistRequest,
         SwitchToPlaylistResponse, FILE_DESCRIPTOR_SET,
-    },
+    }
 };
 
 // Playlist name constants.
@@ -52,10 +51,9 @@ impl Driver {
 }
 
 impl super::Driver for Driver {
-    fn monitor_events(&self) -> JoinHandle<Result<(), io::Error>> {
+    fn monitor_events(&self, cancellation_token: CancellationToken) -> JoinHandle<Result<(), io::Error>> {
         let addr = self.addr;
         let player = self.player.clone();
-
         tokio::spawn(async move {
             let span = span!(Level::INFO, "gRPC Server");
             let _enter = span.enter();
@@ -64,18 +62,24 @@ impl super::Driver for Driver {
             let reflection_service = tonic_reflection::server::Builder::configure()
                 .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
                 .build_v1()
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                .map_err(io::Error::other)?;
 
             info!("Starting gRPC server");
+            select!(
+            _cancelled = cancellation_token.cancelled() => {
+                Ok(())
+            },
 
-            Server::builder()
+            server_result = Server::builder()
                 .add_service(reflection_service)
                 .add_service(PlayerServiceServer::new(PlayerServer {
                     player: player.clone(),
-                }))
-                .serve(addr)
-                .await
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+                    }))
+                    .serve(addr)
+                => {
+                    server_result.map_err(io::Error::other)
+                }
+        )
         })
     }
 }
@@ -203,6 +207,7 @@ mod test {
     };
 
     use tokio::net::TcpListener;
+    use tokio_util::sync::CancellationToken;
     use tonic::transport::Channel;
 
     use crate::{
@@ -237,6 +242,7 @@ mod test {
                 Some(config::Midi::new("mock-midi-device", None)),
                 None,
                 HashMap::new(),
+                None,
                 "assets/songs",
             ),
         )?);
@@ -252,7 +258,8 @@ mod test {
         println!("Using port {} for testing.", port);
 
         let driver = Driver::new(config::GrpcController::new(port), player.clone())?;
-        tokio::spawn(driver.monitor_events());
+        let cancellation_token = CancellationToken::new();
+        tokio::spawn(driver.monitor_events(cancellation_token.clone()));
         let mut client: Option<PlayerServiceClient<Channel>> = None;
         for _ in 0..5 {
             match PlayerServiceClient::connect(format!("http://127.0.0.1:{}", port)).await {
@@ -348,6 +355,7 @@ mod test {
         // Player should not have moved to the next song.
         assert_eq!(player.get_playlist().current().name(), "Song 5");
 
+        cancellation_token.cancel();
         Ok(())
     }
 }

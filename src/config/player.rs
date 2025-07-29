@@ -27,18 +27,12 @@ use tracing::error;
 /// The configuration for the multitrack player.
 #[derive(Deserialize)]
 pub struct Player {
-    /// The controller configuration.
-    controller: Option<Controller>,
     /// The controllers configuration.
     controllers: Option<Vec<Controller>>,
-    /// The audio device to use.
-    audio_device: Option<String>,
     /// The audio configuration section.
-    audio: Option<Audio>,
+    audio: Audio,
     /// The track mappings for the player.
     track_mappings: TrackMappings,
-    /// The MIDI device to use. (deprecated)
-    midi_device: Option<String>,
     /// The MIDI configuration section.
     midi: Option<Midi>,
     /// The DMX configuration.
@@ -58,18 +52,16 @@ impl Player {
         midi: Option<Midi>,
         dmx: Option<Dmx>,
         track_mappings: HashMap<String, Vec<u16>>,
+        status_events: Option<StatusEvents>,
         songs: &str,
     ) -> Player {
         Player {
-            controller: None,
             controllers: Some(controllers),
-            audio_device: None,
-            audio: Some(audio),
+            audio,
             track_mappings: TrackMappings { track_mappings },
-            midi_device: None,
             midi,
             dmx,
-            status_events: None,
+            status_events,
             playlist: None,
             songs: songs.to_string(),
         }
@@ -85,31 +77,15 @@ impl Player {
 
     /// Gets the controllers configuration.
     pub fn controllers(&self) -> Vec<Controller> {
-        if let Some(controllers) = &self.controllers {
-            return controllers.clone();
-        } else if let Some(controller) = &self.controller {
-            if let Controller::Multi(multi) = controller {
-                return multi
-                    .iter()
-                    .map(|(_, controller)| controller.clone())
-                    .collect();
-            }
-
-            return vec![controller.clone()];
+        match &self.controllers {
+            Some(controllers) => controllers.clone(),
+            None => vec![],
         }
-
-        vec![]
     }
 
     /// Gets the audio configuration.
-    pub fn audio(&self) -> Option<Audio> {
-        if let Some(audio) = &self.audio {
-            return Some(audio.clone());
-        } else if let Some(audio_device) = &self.audio_device {
-            return Some(Audio::new(audio_device));
-        }
-
-        None
+    pub fn audio(&self) -> Audio {
+        self.audio.clone()
     }
 
     /// Gets the track mapping configuration.
@@ -119,13 +95,7 @@ impl Player {
 
     /// Gets the MIDI configuration.
     pub fn midi(&self) -> Option<Midi> {
-        if let Some(midi) = &self.midi {
-            return Some(midi.clone());
-        } else if let Some(midi_device) = &self.midi_device {
-            return Some(Midi::new(midi_device, None));
-        }
-
-        None
+        self.midi.clone()
     }
 
     /// Gets the DMX configuration.
@@ -158,4 +128,35 @@ impl Player {
         };
         player_path_directory.join(&self.songs)
     }
+}
+
+#[cfg(test)]
+mod test {
+    use std::path::Path;
+
+    use crate::config::{audio::DEFAULT_AUDIO_PLAYBACK_DELAY, Player};
+
+
+    #[test]
+    fn test_deserialize_ok()
+    {
+        let path = Path::new("assets/test_data/player_ok.yml");
+        let deserialized = match Player::deserialize(&path) {
+            Ok(deserialized) => {
+assert!(true);
+                deserialized
+            },
+            Err(error) => {
+                assert!(false, "Could not deserialize valid player configuration. {error}");
+                return;
+            }
+        };
+        assert_eq!(deserialized.controllers().len(), 0, "Expected not to find any controllers in minimal configuration");
+        let playback_delay = match deserialized.audio().playback_delay() {
+            Ok(playback_delay) => playback_delay,
+            Err(_) => todo!(),
+        };
+        assert_eq!(playback_delay, DEFAULT_AUDIO_PLAYBACK_DELAY, "Expected default playback delay to be used");
+    }
+
 }

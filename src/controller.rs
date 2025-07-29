@@ -15,6 +15,7 @@ use std::error::Error;
 use std::io;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
 use crate::config;
 use crate::player::Player;
@@ -25,12 +26,14 @@ mod midi;
 mod osc;
 
 pub trait Driver: Send + Sync + 'static {
-    fn monitor_events(&self) -> JoinHandle<Result<(), io::Error>>;
+    fn monitor_events(&self, cancellation_token: tokio_util::sync::CancellationToken) -> JoinHandle<Result<(), io::Error>>;
 }
 
 /// Controls a playlist.
 pub struct Controller {
     handles: Vec<JoinHandle<Result<(), io::Error>>>,
+    #[cfg(test)]
+    cancellation_token: CancellationToken
 }
 
 impl Controller {
@@ -47,7 +50,6 @@ impl Controller {
                 config::Controller::Keyboard => keyboard::Driver::new(player),
                 config::Controller::Osc(config) => osc::Driver::new(config, player)?,
                 config::Controller::Midi(config) => midi::Driver::new(config, player)?,
-                _ => return Err("unexpected controller type".into()),
             };
             controller_drivers.push(driver);
         }
@@ -56,11 +58,17 @@ impl Controller {
 
     /// Creates a new controller from multiple drivers.
     pub fn new_from_drivers(drivers: Vec<Arc<dyn Driver>>) -> Controller {
+        let cancellation_token = CancellationToken::new();
         let mut handles = Vec::new();
         for driver in drivers {
-            handles.push(driver.monitor_events());
+            handles.push(driver.monitor_events(cancellation_token.clone()));
         }
-        Controller { handles }
+
+        Controller { 
+            handles,
+            #[cfg(test)]
+            cancellation_token
+        }
     }
 
     /// Join will block until the controller finishes.
@@ -69,6 +77,14 @@ impl Controller {
             handle.await??;
         }
 
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub async fn shutdown(&mut self) -> Result<(), Box<dyn Error>> {
+        println!("Cancelling tasks..");
+        self.cancellation_token.cancel();
+        println!("Cancelled, joining tasks..");
         Ok(())
     }
 }
@@ -81,6 +97,7 @@ mod test {
         sync::{Barrier, Mutex},
         task::JoinHandle,
     };
+    use tokio_util::sync::CancellationToken;
 
     use crate::{config, player::Player, playlist::Playlist, songs, testutil::eventually};
 
@@ -130,7 +147,7 @@ mod test {
     }
 
     impl Driver for TestDriver {
-        fn monitor_events(&self) -> JoinHandle<Result<(), io::Error>> {
+        fn monitor_events(&self, cancellation_token: CancellationToken) -> JoinHandle<Result<(), io::Error>> {
             let barrier = self.barrier.clone();
             let current_event = self.current_event.clone();
             let player = self.player.clone();
@@ -161,7 +178,10 @@ mod test {
                         TestEvent::Playlist => {
                             player.switch_to_playlist().await;
                         }
-                        TestEvent::Close => return Ok(()),
+                        TestEvent::Close => {
+                            cancellation_token.cancel();                        
+                            return Ok(());
+                        }
                     }
                 }
             });
@@ -184,6 +204,7 @@ mod test {
                 None,
                 None,
                 HashMap::new(),
+                None,
                 "assets/songs",
             ),
         )?);

@@ -73,3 +73,21 @@ pub fn get_device(
 
     Ok(Some(Arc::new(midir::get(&config, dmx_engine)?)))
 }
+
+#[cfg(test)]
+mod test {
+    use crate::audio::list_devices;
+
+    #[test]
+    fn test_list_midi_devices() {
+        let devices = list_devices();
+        match devices {
+            Ok(_device_list) => {
+                assert!(true)
+            },
+            Err(err) => {
+                assert!(false, "{}", err.to_string())
+            },
+        }
+    }
+}

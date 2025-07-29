@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with
 // this program. If not, see <https://www.gnu.org/licenses/>.
 //
-use std::{collections::HashMap, error::Error};
+use std::error::Error;
 
 use midly::live::LiveEvent;
 use serde::Deserialize;
@@ -39,7 +39,6 @@ pub enum Controller {
     Grpc(GrpcController),
     Keyboard,
     Midi(MidiController),
-    Multi(HashMap<String, Controller>),
     Osc(Box<OscController>),
 }
 
@@ -188,6 +187,19 @@ impl OscController {
     /// Gets the broadcast addresses to broadcast OSC status messages to.
     pub fn broadcast_addresses(&self) -> Vec<String> {
         self.broadcast_addresses.clone().unwrap_or_default()
+    }
+
+    #[cfg(test)]
+    pub fn add_broadcast_address(&mut self, address: String) {
+        match self.broadcast_addresses {
+            Some(ref mut adresses) => {
+                adresses.push(address)
+            },
+            None => {
+                self.broadcast_addresses = Some(vec![address])
+            }
+        };
+
     }
 
     /// Gets the play OSC address.

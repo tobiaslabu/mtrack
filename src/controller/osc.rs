@@ -30,6 +30,7 @@ use tokio::{
     sync::mpsc::{self, Receiver, Sender},
     task::JoinHandle,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, span, Level};
 
 use crate::{config, player::Player, util};
@@ -110,7 +111,7 @@ impl Driver {
 }
 
 impl super::Driver for Driver {
-    fn monitor_events(&self) -> JoinHandle<Result<(), std::io::Error>> {
+    fn monitor_events(&self, cancellation_token: CancellationToken) -> JoinHandle<Result<(), std::io::Error>> {
         let addr = self.addr;
         let broadcast_addresses = self.broadcast_addresses.clone();
         let player = self.player.clone();
@@ -130,9 +131,11 @@ impl super::Driver for Driver {
                 if ip.is_multicast() {
                     match ip {
                         std::net::IpAddr::V4(ipv4_addr) => {
+                            socket.set_multicast_loop_v4(true)?;
                             socket.join_multicast_v4(ipv4_addr, Ipv4Addr::UNSPECIFIED)?
                         }
                         std::net::IpAddr::V6(ipv6_addr) => {
+                            socket.set_multicast_loop_v6(true)?;
                             socket.join_multicast_v6(&ipv6_addr, 0)?
                         }
                     }
@@ -146,6 +149,7 @@ impl super::Driver for Driver {
                 broadcast_addresses,
                 rx_sender,
                 tx_receiver,
+                cancellation_token.clone()
             ));
 
             // Start the broadcast async task.
@@ -155,24 +159,33 @@ impl super::Driver for Driver {
                 let osc_events = osc_events.clone();
 
                 info!("Starting broadcast loop");
+                let cancellation_token_clone = cancellation_token.clone();
                 tokio::spawn(async move {
                     loop {
                         if let Err(e) = Self::broadcast(&player, &osc_events, &tx_sender).await {
                             error!(err = e, "Error broadcasting player status");
                         }
+                        if cancellation_token_clone.is_cancelled() {
+                            break;
+                        }
                         tokio::time::sleep(BROADCAST_SLEEP_DURATION).await;
                     }
+                    println!("Broadcast loop finished.");
                 });
             }
 
             loop {
+                println!("Waiting for packet..");
+                if cancellation_token.is_cancelled() {
+                    break;
+                }
                 let packet = rx_receiver.recv().await;
                 let tx_sender = tx_sender.clone();
 
                 if let Some(packet) = packet {
                     if Self::handle_packet(&player, &osc_events, &packet)
                         .await
-                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?
+                        .map_err(|e| io::Error::other(e.to_string()))?
                     {
                         if let Err(e) = Self::broadcast(&player, &osc_events, &tx_sender).await {
                             error!(err = e, "Error broadcasting player status");
@@ -180,6 +193,7 @@ impl super::Driver for Driver {
                     }
                 }
             }
+            Ok(())
         })
     }
 }
@@ -191,6 +205,7 @@ impl Driver {
         broadcast_addresses: Vec<SocketAddr>,
         rx_sender: Sender<OscPacket>,
         mut tx_receiver: Receiver<OscPacket>,
+        cancellation_token: CancellationToken
     ) {
         let mut buf = [0u8; rosc::decoder::MTU];
 
@@ -198,6 +213,9 @@ impl Driver {
         // as we don't want the program to fail if we run into spurious errors.
         loop {
             select! {
+                _cancelled = cancellation_token.cancelled() => {
+                    break;
+                },
                 result = socket.recv_from(&mut buf) => {
                     match result {
                         Ok((size, _)) => {
@@ -357,17 +375,28 @@ mod test {
 
     use crate::{
         config,
-        controller::osc::{Driver, STATUS_PLAYING, STATUS_STOPPED},
+        controller::{self, osc::{Driver, STATUS_PLAYING, STATUS_STOPPED}},
+        player::Player,
         playlist::Playlist,
         songs,
         testutil::eventually,
     };
 
-    use super::Player;
-
     #[tokio::test(flavor = "multi_thread")]
     async fn test_osc() -> Result<(), Box<dyn Error>> {
+        osc_test_ip("127.0.0.1:4321").await?;
+        osc_test_ip("[::1]:4321").await?;
+        osc_test_ip("239.192.0.1:4321").await?;
+        Ok(())
+    }
+
+    async fn osc_test_ip(ip: &str) -> Result<(), Box<dyn Error>> {
         let songs = songs::get_all_songs(Path::new("assets/songs"))?;
+        let mut osc_config = Box::new(config::OscController::new());
+
+        osc_config.add_broadcast_address(ip.to_string());
+        let osc_controller = config::Controller::Osc(osc_config.clone());
+        let status_events_config = config::StatusEvents::new();
         let player = Arc::new(Player::new(
             songs.clone(),
             Playlist::new(
@@ -375,18 +404,20 @@ mod test {
                 songs,
             )?,
             &config::Player::new(
-                vec![config::Controller::Keyboard],
+                vec![config::Controller::Keyboard, osc_controller.clone()],
                 config::Audio::new("mock-device"),
                 Some(config::Midi::new("mock-midi-device", None)),
                 None,
                 HashMap::new(),
+                Some(status_events_config),
                 "assets/songs",
             ),
         )?);
+        let mut controller = controller::Controller::new(vec![osc_controller], player.clone())?;
         let binding = player.audio_device();
         let device = binding.to_mock()?;
 
-        let driver = Driver::new(Box::new(config::OscController::new()), player.clone())?;
+        let driver = Driver::new(osc_config, player.clone())?;
         let next = driver.osc_events.next.pattern.clone();
         let prev = driver.osc_events.prev.pattern.clone();
         let play = driver.osc_events.play.pattern.clone();
@@ -509,6 +540,16 @@ mod test {
             })
         );
 
+        if let Err(err) = controller.shutdown().await {
+            assert!(false, "Failed to shut down controller! {err}");
+        }
+
+        if let Err(err) = controller.join().await {
+            assert!(
+                false,
+                "Error waiting for controller! {err}",
+            );
+        }
         Ok(())
     }
 

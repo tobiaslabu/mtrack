@@ -336,6 +336,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     midi_config,
                     dmx_config,
                     converted_mappings,
+                    None,
                     &repository_path,
                 ),
             )?;

@@ -619,6 +619,7 @@ mod test {
                 Some(config::Midi::new("mock-midi-device", None)),
                 None,
                 HashMap::new(),
+                None,
                 "assets/songs",
             ),
         )?;

@@ -12,7 +12,6 @@
 // this program. If not, see <https://www.gnu.org/licenses/>.
 //
 use std::error::Error;
-
 use midly::live::LiveEvent;
 use serde::Deserialize;
 
@@ -32,6 +31,17 @@ pub struct StatusEvents {
 }
 
 impl StatusEvents {
+    #[cfg(test)]
+    pub fn new() -> Self {
+        Self {
+            off_events: vec![
+                midi::Event::Aftertouch(midi::Aftertouch::new()
+                    )],
+            idling_events: vec![],
+            playing_events: vec![],
+        }
+    }
+
     /// Gets the off events.
     pub fn off_events(&self) -> Result<Vec<LiveEvent<'static>>, Box<dyn Error>> {
         self.off_events
